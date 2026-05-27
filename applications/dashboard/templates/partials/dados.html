@@ -1,0 +1,24 @@
+<div class="cards">
+    <div class="card">
+        <div class="icon">&#x1F4A7;</div>
+        <div class="label">Nível de água</div>
+        <div class="valor">{{ leituras.nivel_cm }} cm</div>
+    </div>
+    <div class="card">
+        <div class="icon">&#x1F321;</div>
+        <div class="label">Umidade do Ar</div>
+        <div class="valor">{{ leituras.umidade }}%</div>
+    </div>
+    <div class="card">
+        <div class="icon">
+            {% if leituras.status == 'normal' %}&#x2705;{% elif leituras.status == 'atencao' %}&#x26A0;{% else %}&#x1F6A8;{% endif %}
+        </div>
+        <div class="label">Status</div>
+        <div class="valor status-{{ leituras.status }}">
+            {% if leituras.status == 'normal' %}NORMAL
+            {% elif leituras.status == 'atencao' %}ATENÇÃO
+            {% else %}CRÍTICO
+            {% endif %}
+        </div>
+    </div>
+</div>
