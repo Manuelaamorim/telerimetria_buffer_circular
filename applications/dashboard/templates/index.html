@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Elevator Guard - Dashboard</title>
+    <title>ElevatorGuard - Analise de Algoritmos</title>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
@@ -18,7 +18,7 @@
             padding: 30px 20px;
         }
 
-        .container { max-width: 960px; margin: 0 auto; }
+        .container { max-width: 1100px; margin: 0 auto; }
 
         .header {
             text-align: center;
@@ -61,11 +61,7 @@
             box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
         }
 
-        .card .icon {
-            font-size: 2rem;
-            margin-bottom: 10px;
-        }
-
+        .card .icon { font-size: 2rem; margin-bottom: 10px; }
         .card .label {
             font-size: 0.8rem;
             text-transform: uppercase;
@@ -73,11 +69,7 @@
             color: #aaa;
             margin-bottom: 8px;
         }
-
-        .card .valor {
-            font-size: 2.2rem;
-            font-weight: 700;
-        }
+        .card .valor { font-size: 2.2rem; font-weight: 700; }
 
         .status-normal { color: #4caf50; }
         .status-atencao { color: #ff9800; }
@@ -88,12 +80,24 @@
             50% { opacity: 0.5; }
         }
 
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
         .chart-container {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 16px;
             padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .chart-container.full-width {
+            grid-column: 1 / -1;
         }
 
         .chart-container h2 {
@@ -103,7 +107,23 @@
             color: #ccc;
         }
 
+        .chart-container .subtitle {
+            font-size: 0.75rem;
+            color: #777;
+            margin-top: -10px;
+            margin-bottom: 16px;
+        }
+
         canvas { width: 100% !important; }
+
+        .section-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #aaa;
+            margin: 30px 0 15px 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
 
         .footer {
             text-align: center;
@@ -111,72 +131,124 @@
             font-size: 0.75rem;
             color: #555;
         }
+
+        @media (max-width: 768px) {
+            .charts-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Elevator Guard</h1>
-            <p>Sentinela contra Dengue &mdash; Monitoramento em Tempo Real</p>
+            <h1>ElevatorGuard - Analise de Algoritmos</h1>
+            <p>Buffer Circular vs Deslocamento Linear &mdash; Comparativo de Performance</p>
         </div>
 
+        <!-- Cards de dados atuais -->
         <div hx-get="/dados" hx-trigger="every 2s" hx-swap="innerHTML">
             {% include 'partials/dados.html' %}
         </div>
 
+        <!-- Secao: Dados do Sensor -->
+        <div class="section-title">Telemetria do Sensor</div>
         <div class="chart-container">
-            <h2>Histórico de Leituras</h2>
-            <canvas id="grafico" height="120"></canvas>
+            <h2>Historico de Leituras</h2>
+            <canvas id="graficoSensor" height="100"></canvas>
+        </div>
+
+        <!-- Secao: Analise de Performance -->
+        <div class="section-title">Analise de Performance (Vertente 1 vs Vertente 2)</div>
+
+        <div class="charts-grid">
+            <div class="chart-container">
+                <h2>Latencia em Tempo Real</h2>
+                <p class="subtitle">Tempo de insercao por amostra (us)</p>
+                <canvas id="graficoLatencia" height="150"></canvas>
+            </div>
+
+            <div class="chart-container">
+                <h2>Teste de Estresse</h2>
+                <p class="subtitle">Tempo total por N insercoes (us)</p>
+                <canvas id="graficoEstresse" height="150"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h2>Heap Livre (Memoria)</h2>
+            <p class="subtitle">Monitoramento da saude da memoria do ESP32</p>
+            <canvas id="graficoHeap" height="80"></canvas>
         </div>
 
         <div class="footer">
-            Cesar School &mdash; Sistemas Embarcados 2026 | ESP32 + MQTT + Flask
+            Cesar School &mdash; Analise de Algoritmos + Sistemas Embarcados 2026 | ESP32 + MQTT + Flask
         </div>
     </div>
 
     <script>
-        const ctx = document.getElementById('grafico').getContext('2d');
-        const chart = new Chart(ctx, {
+        // Grafico 1: Dados do sensor
+        const ctxSensor = document.getElementById('graficoSensor').getContext('2d');
+        const chartSensor = new Chart(ctxSensor, {
             type: 'line',
             data: {
                 labels: [],
                 datasets: [
                     {
-                        label: 'Nível (cm)',
+                        label: 'Nivel (cm)',
                         data: [],
                         borderColor: '#4caf50',
                         backgroundColor: 'rgba(76, 175, 80, 0.1)',
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 3,
-                        pointBackgroundColor: '#4caf50'
+                        fill: true, tension: 0.4, pointRadius: 2
                     },
                     {
                         label: 'Umidade (%)',
                         data: [],
                         borderColor: '#2196f3',
                         backgroundColor: 'rgba(33, 150, 243, 0.1)',
-                        fill: true,
-                        tension: 0.4,
-                        pointRadius: 3,
-                        pointBackgroundColor: '#2196f3'
+                        fill: true, tension: 0.4, pointRadius: 2
                     }
                 ]
             },
             options: {
                 responsive: true,
-                plugins: {
-                    legend: {
-                        labels: { color: '#aaa', font: { family: 'Inter' } }
-                    }
-                },
+                plugins: { legend: { labels: { color: '#aaa' } } },
                 scales: {
-                    x: {
-                        ticks: { color: '#666', maxTicksLimit: 10 },
-                        grid: { color: 'rgba(255,255,255,0.05)' }
+                    x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: { beginAtZero: true, ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                }
+            }
+        });
+
+        // Grafico 2: Latencia em tempo real
+        const ctxLatencia = document.getElementById('graficoLatencia').getContext('2d');
+        const chartLatencia = new Chart(ctxLatencia, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Linear O(n)',
+                        data: [],
+                        borderColor: '#f44336',
+                        backgroundColor: 'rgba(244, 67, 54, 0.1)',
+                        fill: true, tension: 0.3, pointRadius: 2
                     },
+                    {
+                        label: 'Circular O(1)',
+                        data: [],
+                        borderColor: '#4caf50',
+                        backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                        fill: true, tension: 0.3, pointRadius: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#aaa' } } },
+                scales: {
+                    x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
                     y: {
                         beginAtZero: true,
+                        title: { display: true, text: 'us', color: '#666' },
                         ticks: { color: '#666' },
                         grid: { color: 'rgba(255,255,255,0.05)' }
                     }
@@ -184,13 +256,98 @@
             }
         });
 
+        // Grafico 3: Teste de Estresse (barras)
+        const ctxEstresse = document.getElementById('graficoEstresse').getContext('2d');
+        const chartEstresse = new Chart(ctxEstresse, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Linear O(n)',
+                        data: [],
+                        backgroundColor: 'rgba(244, 67, 54, 0.7)',
+                        borderColor: '#f44336',
+                        borderWidth: 1
+                    },
+                    {
+                        label: 'Circular O(1)',
+                        data: [],
+                        backgroundColor: 'rgba(76, 175, 80, 0.7)',
+                        borderColor: '#4caf50',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#aaa' } } },
+                scales: {
+                    x: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'us', color: '#666' },
+                        ticks: { color: '#666' },
+                        grid: { color: 'rgba(255,255,255,0.05)' }
+                    }
+                }
+            }
+        });
+
+        // Grafico 4: Heap livre
+        const ctxHeap = document.getElementById('graficoHeap').getContext('2d');
+        const chartHeap = new Chart(ctxHeap, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Heap Livre (bytes)',
+                    data: [],
+                    borderColor: '#ff9800',
+                    backgroundColor: 'rgba(255, 152, 0, 0.1)',
+                    fill: true, tension: 0.3, pointRadius: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#aaa' } } },
+                scales: {
+                    x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                    y: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                }
+            }
+        });
+
+        // Atualiza graficos a cada 3s
         setInterval(async () => {
-            const res = await fetch('/api/historico');
-            const dados = await res.json();
-            chart.data.labels = dados.map(d => d.timestamp);
-            chart.data.datasets[0].data = dados.map(d => d.nivel_cm);
-            chart.data.datasets[1].data = dados.map(d => d.umidade);
-            chart.update();
+            // Dados do sensor
+            const resSensor = await fetch('/api/historico');
+            const dadosSensor = await resSensor.json();
+            chartSensor.data.labels = dadosSensor.map(d => d.timestamp);
+            chartSensor.data.datasets[0].data = dadosSensor.map(d => d.nivel_cm);
+            chartSensor.data.datasets[1].data = dadosSensor.map(d => d.umidade);
+            chartSensor.update();
+
+            // Performance tempo real
+            const resPerf = await fetch('/api/performance');
+            const dadosPerf = await resPerf.json();
+            chartLatencia.data.labels = dadosPerf.map(d => d.timestamp);
+            chartLatencia.data.datasets[0].data = dadosPerf.map(d => d.linear_us);
+            chartLatencia.data.datasets[1].data = dadosPerf.map(d => d.circular_us);
+            chartLatencia.update();
+
+            // Heap
+            chartHeap.data.labels = dadosPerf.map(d => d.timestamp);
+            chartHeap.data.datasets[0].data = dadosPerf.map(d => d.heap_livre);
+            chartHeap.update();
+
+            // Teste de estresse
+            const resEstresse = await fetch('/api/estresse');
+            const dadosEstresse = await resEstresse.json();
+            chartEstresse.data.labels = dadosEstresse.map(d => 'N=' + d.N);
+            chartEstresse.data.datasets[0].data = dadosEstresse.map(d => d.linear_us);
+            chartEstresse.data.datasets[1].data = dadosEstresse.map(d => d.circular_us);
+            chartEstresse.update();
         }, 3000);
     </script>
 </body>
