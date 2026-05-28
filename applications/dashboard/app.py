@@ -51,7 +51,7 @@ def processar_dados(dados):
 
 def processar_performance(dados):
     if "N" in dados:
-        performance["estresse"].append({
+        entry = {
             "N": dados["N"],
             "linear_us": dados["linear_us"],
             "circular_us": dados["circular_us"],
@@ -59,7 +59,13 @@ def processar_performance(dados):
             "heap_circular": dados.get("heap_circular", 0),
             "speedup": dados.get("speedup", 0),
             "timestamp": time.strftime("%H:%M:%S")
-        })
+        }
+        # Substitui resultado anterior do mesmo N (nao acumula)
+        performance["estresse"] = [
+            e for e in performance["estresse"] if e["N"] != dados["N"]
+        ]
+        performance["estresse"].append(entry)
+        performance["estresse"].sort(key=lambda e: e["N"])
     else:
         performance["tempo_real"].append({
             "linear_us": dados["linear_us"],

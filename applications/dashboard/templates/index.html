@@ -162,14 +162,15 @@
         <div class="charts-grid">
             <div class="chart-container">
                 <h2>Latencia em Tempo Real</h2>
-                <p class="subtitle">Tempo de insercao por amostra (us)</p>
+                <p class="subtitle">Tempo de 500 insercoes por ciclo (escala logaritmica, us)</p>
                 <canvas id="graficoLatencia" height="150"></canvas>
             </div>
 
             <div class="chart-container">
                 <h2>Teste de Estresse</h2>
-                <p class="subtitle">Tempo total por N insercoes (us)</p>
+                <p class="subtitle">Tempo total por N insercoes (escala logaritmica, us)</p>
                 <canvas id="graficoEstresse" height="150"></canvas>
+                <div id="speedupInfo" style="margin-top:12px; font-size:0.85rem; color:#aaa; text-align:center;"></div>
             </div>
         </div>
 
@@ -218,7 +219,7 @@
             }
         });
 
-        // Grafico 2: Latencia em tempo real
+        // Grafico 2: Latencia em tempo real (escala logaritmica)
         const ctxLatencia = document.getElementById('graficoLatencia').getContext('2d');
         const chartLatencia = new Chart(ctxLatencia, {
             type: 'line',
@@ -247,8 +248,8 @@
                 scales: {
                     x: { ticks: { color: '#666', maxTicksLimit: 10 }, grid: { color: 'rgba(255,255,255,0.05)' } },
                     y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'us', color: '#666' },
+                        type: 'logarithmic',
+                        title: { display: true, text: 'us (log)', color: '#666' },
                         ticks: { color: '#666' },
                         grid: { color: 'rgba(255,255,255,0.05)' }
                     }
@@ -256,7 +257,7 @@
             }
         });
 
-        // Grafico 3: Teste de Estresse (barras)
+        // Grafico 3: Teste de Estresse (barras, escala logaritmica)
         const ctxEstresse = document.getElementById('graficoEstresse').getContext('2d');
         const chartEstresse = new Chart(ctxEstresse, {
             type: 'bar',
@@ -285,8 +286,8 @@
                 scales: {
                     x: { ticks: { color: '#666' }, grid: { color: 'rgba(255,255,255,0.05)' } },
                     y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'us', color: '#666' },
+                        type: 'logarithmic',
+                        title: { display: true, text: 'us (log)', color: '#666' },
                         ticks: { color: '#666' },
                         grid: { color: 'rgba(255,255,255,0.05)' }
                     }
@@ -348,6 +349,14 @@
             chartEstresse.data.datasets[0].data = dadosEstresse.map(d => d.linear_us);
             chartEstresse.data.datasets[1].data = dadosEstresse.map(d => d.circular_us);
             chartEstresse.update();
+
+            // // Mostra speedup como texto
+            // if (dadosEstresse.length > 0) {
+            //     const info = dadosEstresse.map(d =>
+            //         'N=${d.N}: Linear ${d.linear_us.toLocaleString()} us vs Circular ${d.circular_us.toLocaleString()} us (<strong>${d.speedup}x mais rapido</strong>)'
+            //     ).join(' | ');
+            //     document.getElementById('speedupInfo').innerHTML = info;
+            // }
         }, 3000);
     </script>
 </body>

@@ -11,9 +11,9 @@
 #define LED_G 26
 #define LED_B 27
 
-const char* WIFI_SSID = "NET_602.5G";
+const char* WIFI_SSID = "NET_602.2G";
 const char* WIFI_PASS = "409369048";
-const char* MQTT_BROKER = "172.20.10.8";
+const char* MQTT_BROKER = "192.168.0.44";
 const int MQTT_PORT = 1883;
 const char* MQTT_TOPIC_DADOS = "elevatorguard/dados";
 const char* MQTT_TOPIC_PERF = "elevatorguard/performance";
@@ -25,7 +25,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 // ============================================================
 // VERTENTE 2: Buffer Circular (Eficiente - O(1))
 // ============================================================
-#define BUFFER_SIZE 100
+#define BUFFER_SIZE 1000
 
 struct Amostra {
     float nivel_cm;
@@ -172,13 +172,13 @@ void testeEstresse(int N) {
     Serial.printf("Vertente 2 (Circular): %lu us | Heap: %u bytes\n", duracaoCircular, heapDepoisCircular);
     Serial.printf("Speedup: %.2fx mais rapido\n", (float)duracaoLinear / (float)duracaoCircular);
 
-    // Publica comparativo via MQTT
+    // Publica comparativo via MQTT (com retain pra dashboard nao perder)
     char payload[256];
     snprintf(payload, sizeof(payload),
         "{\"N\":%d,\"linear_us\":%lu,\"circular_us\":%lu,\"heap_linear\":%u,\"heap_circular\":%u,\"speedup\":%.2f}",
         N, duracaoLinear, duracaoCircular, heapDepoisLinear, heapDepoisCircular,
         (float)duracaoLinear / (float)duracaoCircular);
-    mqtt.publish(MQTT_TOPIC_PERF, payload);
+    mqtt.publish(MQTT_TOPIC_PERF, payload, true);
 }
 
 // ============================================================
@@ -186,10 +186,11 @@ void testeEstresse(int N) {
 // ============================================================
 unsigned long latenciaV1 = 0;
 unsigned long latenciaV2 = 0;
+#define INSERCOES_POR_CICLO 500
 
 // ============================================================
 // VERTENTE 1: Envio Sincrono (bloqueia amostragem)
-// Le sensor -> desloca array -> envia MQTT -> so entao libera
+// Le sensor -> desloca array N vezes -> envia MQTT -> so entao libera
 // ============================================================
 void vertente1_sincrono() {
     unsigned long inicioTotal = micros();
@@ -201,13 +202,15 @@ void vertente1_sincrono() {
 
     Amostra novaAmostra = {nivel_cm, umidade, micros()};
 
-    // Insercao com deslocamento O(n)
+    // Insercao com deslocamento O(n) - multiplas insercoes pra evidenciar custo
     unsigned long t1 = micros();
-    pushLinear(novaAmostra);
+    for (int i = 0; i < INSERCOES_POR_CICLO; i++) {
+        novaAmostra.timestamp = micros();
+        pushLinear(novaAmostra);
+    }
     unsigned long latenciaInsercao = micros() - t1;
 
     // Envio MQTT SINCRONO - bloqueia ate completar
-    // Serializa todos os dados do array e envia de uma vez
     char payload[200];
     snprintf(payload, sizeof(payload),
         "{\"vertente\":1,\"nivel_cm\":%.1f,\"umidade\":%.1f,\"status\":\"%s\"}",
@@ -217,10 +220,10 @@ void vertente1_sincrono() {
     // Tempo total inclui leitura + insercao + envio (tudo bloqueante)
     unsigned long tempoTotal = micros() - inicioTotal;
 
-    Serial.printf("[V1-SINCRONO] Insercao: %lu us | Total (com MQTT): %lu us\n",
-        latenciaInsercao, tempoTotal);
+    Serial.printf("[V1-SINCRONO] %d insercoes: %lu us | Total: %lu us\n",
+        INSERCOES_POR_CICLO, latenciaInsercao, tempoTotal);
 
-    latenciaV1 = tempoTotal;
+    latenciaV1 = latenciaInsercao;
 }
 
 // ============================================================
@@ -236,12 +239,16 @@ void vertente2_produtor() {
 
     Amostra novaAmostra = {nivel_cm, umidade, micros()};
 
+    // Mesma quantidade de insercoes pra comparacao justa
     unsigned long t2 = micros();
-    bufferCircular.push(novaAmostra);
+    for (int i = 0; i < INSERCOES_POR_CICLO; i++) {
+        novaAmostra.timestamp = micros();
+        bufferCircular.push(novaAmostra);
+    }
     latenciaV2 = micros() - t2;
 
-    Serial.printf("[V2-PRODUTOR] Push O(1): %lu us | Buffer: %d/%d\n",
-        latenciaV2, bufferCircular.count, BUFFER_SIZE);
+    Serial.printf("[V2-PRODUTOR] %d insercoes O(1): %lu us | Buffer: %d/%d\n",
+        INSERCOES_POR_CICLO, latenciaV2, bufferCircular.count, BUFFER_SIZE);
 }
 
 void vertente2_consumidor() {
@@ -299,8 +306,10 @@ void setup() {
 
 unsigned long ultimaLeitura = 0;
 unsigned long ultimoEnvioConsumidor = 0;
+unsigned long ultimoEstresse = 0;
 const unsigned long INTERVALO_LEITURA = 3000;
 const unsigned long INTERVALO_CONSUMIDOR = 5000;
+const unsigned long INTERVALO_ESTRESSE = 30000;
 
 void loop() {
     if (!mqtt.connected()) conectarMQTT();
@@ -340,9 +349,20 @@ void loop() {
     }
 
     // --- Consumidor da Vertente 2: roda em intervalo SEPARADO ---
-    // Isso demonstra que o envio MQTT e desacoplado da leitura do sensor
     if (agora - ultimoEnvioConsumidor >= INTERVALO_CONSUMIDOR) {
         ultimoEnvioConsumidor = agora;
         vertente2_consumidor();
+    }
+
+    // --- Teste de estresse periodico (a cada 30s) ---
+    if (agora - ultimoEstresse >= INTERVALO_ESTRESSE) {
+        ultimoEstresse = agora;
+        Serial.println("\n--- Executando testes de estresse periodicos ---");
+        testeEstresse(100);
+        mqtt.loop();
+        testeEstresse(5000);
+        mqtt.loop();
+        testeEstresse(20000);
+        mqtt.loop();
     }
 }
