@@ -11,9 +11,9 @@
 #define LED_G 26
 #define LED_B 27
 
-const char* WIFI_SSID = "NET_602.2G";
-const char* WIFI_PASS = "409369048";
-const char* MQTT_BROKER = "192.168.0.44";
+const char* WIFI_SSID = "Iphone_Hugo";
+const char* WIFI_PASS = "Hugo030205";
+const char* MQTT_BROKER = "172.20.10.9";
 const int MQTT_PORT = 1883;
 const char* MQTT_TOPIC_DADOS = "elevatorguard/dados";
 const char* MQTT_TOPIC_PERF = "elevatorguard/performance";
@@ -22,9 +22,7 @@ WiFiClient espClient;
 PubSubClient mqtt(espClient);
 DHT dht(DHT_PIN, DHT_TYPE);
 
-// ============================================================
-// VERTENTE 2: Buffer Circular (Eficiente - O(1))
-// ============================================================
+
 #define BUFFER_SIZE 1000
 
 struct Amostra {
@@ -134,8 +132,8 @@ void setLed(bool r, bool g, bool b) {
 }
 
 const char* classificarStatus(float nivel_cm, float umidade) {
-    if (nivel_cm >= 7.0 && umidade >= 80) return "critico";
-    if (nivel_cm >= 4.0 && umidade >= 70) return "atencao";
+    if (nivel_cm >= 3.0 || umidade >= 95) return "critico";
+    if (nivel_cm >= 2.0 || umidade >= 85) return "atencao";
     return "normal";
 }
 
@@ -198,7 +196,7 @@ void vertente1_sincrono() {
     // Leitura do sensor
     int nivelRaw = medirNivel();
     float umidade = dht.readHumidity();
-    float nivel_cm = (nivelRaw / 4095.0) * 10.0;
+    float nivel_cm = (nivelRaw / 2100.0) * 4.0;
 
     Amostra novaAmostra = {nivel_cm, umidade, micros()};
 
@@ -235,7 +233,7 @@ void vertente2_produtor() {
     // PRODUTOR: le sensor e insere no buffer - NAO envia MQTT aqui
     int nivelRaw = medirNivel();
     float umidade = dht.readHumidity();
-    float nivel_cm = (nivelRaw / 4095.0) * 10.0;
+    float nivel_cm = (nivelRaw / 2100.0) * 4.0;
 
     Amostra novaAmostra = {nivel_cm, umidade, micros()};
 
@@ -307,9 +305,9 @@ void setup() {
 unsigned long ultimaLeitura = 0;
 unsigned long ultimoEnvioConsumidor = 0;
 unsigned long ultimoEstresse = 0;
-const unsigned long INTERVALO_LEITURA = 3000;
+const unsigned long INTERVALO_LEITURA = 1000;
 const unsigned long INTERVALO_CONSUMIDOR = 5000;
-const unsigned long INTERVALO_ESTRESSE = 30000;
+const unsigned long INTERVALO_ESTRESSE = 10000;
 
 void loop() {
     if (!mqtt.connected()) conectarMQTT();
@@ -329,7 +327,7 @@ void loop() {
 
         // LED de status baseado na ultima leitura
         int nivelRaw = analogRead(WATER_SENSOR_PIN);
-        float nivel_cm = (nivelRaw / 4095.0) * 10.0;
+        float nivel_cm = (nivelRaw / 2100.0) * 4.0;
         float umidade = dht.readHumidity();
         const char* status = classificarStatus(nivel_cm, umidade);
         if (strcmp(status, "critico") == 0) {

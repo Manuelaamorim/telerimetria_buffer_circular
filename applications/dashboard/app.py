@@ -29,9 +29,9 @@ performance = {
 
 
 def classificar_status(nivel, umidade):
-    if nivel >= 6.0 and umidade >= 80:
+    if nivel >= 3.0 or umidade >= 95:
         return "critico"
-    if nivel >= 3.5 and umidade >= 70:
+    if nivel >= 2.0 or umidade >= 85:
         return "atencao"
     return "normal"
 
