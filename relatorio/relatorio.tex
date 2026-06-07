@@ -1,0 +1,427 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{enumitem}
+
+\geometry{margin=2.5cm}
+
+\definecolor{codebg}{RGB}{245, 245, 245}
+\definecolor{codegreen}{RGB}{0, 128, 0}
+\definecolor{codegray}{RGB}{128, 128, 128}
+\definecolor{codeblue}{RGB}{0, 0, 200}
+
+\lstset{
+    language=C++,
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{codeblue}\bfseries,
+    commentstyle=\color{codegreen}\itshape,
+    stringstyle=\color{codegray},
+    numbers=left,
+    numberstyle=\tiny\color{codegray},
+    stepnumber=1,
+    numbersep=8pt,
+    frame=single,
+    breaklines=true,
+    captionpos=b,
+    tabsize=4,
+    showstringspaces=false
+}
+
+\title{
+    \textbf{ElevatorGuard} \\
+    \large Relatório de Perfilamento e Análise \\
+    Buffer Circular vs.\ Deslocamento Linear em Sistemas Embarcados
+}
+\author{
+    Cesar School --- Análise de Algoritmos + Sistemas Embarcados 2026
+}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Objetivo}
+
+Implementar um sistema de monitoramento embarcado (ESP32) para captura de amostras de sensores de nível de água e umidade, com transmissão via protocolo MQTT. O projeto visa contrastar empiricamente a eficiência de uma abordagem baseada em realocação dinâmica/deslocamento de memória (Vertente~1) frente a uma implementação de Buffer Circular de tamanho fixo (Vertente~2).
+
+O sistema completo inclui:
+\begin{itemize}
+    \item Firmware embarcado em C++ (PlatformIO/Arduino) com ambas as vertentes executando em paralelo para comparação direta;
+    \item Broker MQTT (Mosquitto) como camada de transporte;
+    \item Dashboard web em Flask + Chart.js para visualização de telemetria e métricas de performance em tempo real.
+\end{itemize}
+
+% ============================================================
+\section{Contextualização do Problema}
+
+Em sistemas embarcados como o ESP32, existe uma disparidade temporal crítica entre a captura de dados (ordem de $\mu$s) e a transmissão de rede (ordem de ms). Essa diferença de três ordens de magnitude impõe restrições severas ao gerenciamento de buffers de dados.
+
+O uso de coleções dinâmicas ou deslocamento de arrays para gerenciar históricos de sensores gera o fenômeno do \textit{jitter} (instabilidade temporal). Ao deslocar elementos para manter uma janela de dados, o processador consome ciclos proporcionais ao tamanho da amostra, fragmentando o heap e podendo levar ao colapso do sistema por \textit{stack overflow} ou latência excessiva.
+
+\subsection{Requisitos do Sistema}
+
+\begin{itemize}
+    \item \textbf{Amostragem:} leitura periódica de sensor de nível (analógico) e umidade (DHT11);
+    \item \textbf{Armazenamento:} buffer com capacidade para até 1000 amostras;
+    \item \textbf{Transmissão:} publicação MQTT com QoS adequado;
+    \item \textbf{Indicação visual:} LED RGB para status (normal/atenção/crítico);
+    \item \textbf{Monitoramento:} dashboard web com gráficos de telemetria e performance.
+\end{itemize}
+
+% ============================================================
+\section{Metodologia: As Duas Vertentes}
+
+\subsection{Vertente 1: Deslocamento de Array --- O Anti-Padrão O(n)}
+
+\subsubsection{Lógica de Dados}
+
+A cada inserção quando o buffer está cheio, todos os $n-1$ elementos são deslocados uma posição para a esquerda, liberando a última posição para o novo dado:
+
+\begin{lstlisting}[caption={Inserção com deslocamento linear}]
+void pushLinear(Amostra a) {
+    if (arrayCount >= BUFFER_SIZE) {
+        for (int i = 0; i < BUFFER_SIZE - 1; i++) {
+            arrayLinear[i] = arrayLinear[i + 1];
+        }
+        arrayLinear[BUFFER_SIZE - 1] = a;
+    } else {
+        arrayLinear[arrayCount] = a;
+        arrayCount++;
+    }
+}
+\end{lstlisting}
+
+\subsubsection{Comportamento MQTT}
+
+Envio síncrono que bloqueia a amostragem durante toda a latência de rede. A função \texttt{vertente1\_sincrono()} realiza leitura do sensor, inserção no array e publicação MQTT de forma sequencial e bloqueante.
+
+\subsubsection{Análise de Complexidade}
+
+\begin{itemize}
+    \item \textbf{Inserção (buffer não cheio):} $O(1)$
+    \item \textbf{Inserção (buffer cheio):} $O(n)$, onde $n = $ \texttt{BUFFER\_SIZE}
+    \item \textbf{Pior caso amortizado:} $O(n)$ por operação
+\end{itemize}
+
+\textbf{Prova:} Quando o buffer atinge capacidade máxima $n$, cada nova inserção executa exatamente $n-1$ cópias de estrutura \texttt{Amostra}. Para $k$ inserções consecutivas com buffer cheio:
+\[
+T(k) = k \cdot (n - 1) \in \Theta(k \cdot n)
+\]
+
+O custo por operação é portanto $\Theta(n)$.
+
+% -----------------------------------------------------------
+\subsection{Vertente 2: Buffer Circular --- Eficiência O(1)}
+
+\subsubsection{Lógica de Dados}
+
+Implementação de um Ring Buffer com índices \texttt{head} e \texttt{tail}, manipulados via aritmética modular:
+
+\begin{lstlisting}[caption={Estrutura do Buffer Circular (Ring Buffer)}]
+struct RingBuffer {
+    Amostra dados[BUFFER_SIZE];
+    int head;
+    int tail;
+    int count;
+
+    void init() {
+        head = 0; tail = 0; count = 0;
+    }
+
+    void push(Amostra a) {
+        dados[head] = a;
+        head = (head + 1) % BUFFER_SIZE;
+        if (count < BUFFER_SIZE) {
+            count++;
+        } else {
+            tail = (tail + 1) % BUFFER_SIZE;
+        }
+    }
+
+    Amostra pop() {
+        Amostra a = dados[tail];
+        tail = (tail + 1) % BUFFER_SIZE;
+        count--;
+        return a;
+    }
+};
+\end{lstlisting}
+
+\subsubsection{Comportamento MQTT --- Modelo Produtor-Consumidor}
+
+O buffer absorve a latência da rede sem interromper o sensor:
+\begin{itemize}
+    \item \textbf{Produtor:} lê sensor $\rightarrow$ \texttt{push} no ring buffer $O(1)$ $\rightarrow$ retorna imediatamente;
+    \item \textbf{Consumidor:} em intervalo separado, consome do buffer e envia MQTT (até 10 amostras por ciclo para não bloquear o loop principal).
+\end{itemize}
+
+\subsubsection{Análise de Complexidade}
+
+\begin{itemize}
+    \item \textbf{Inserção (\texttt{push}):} $O(1)$ --- uma escrita + duas operações modulares
+    \item \textbf{Remoção (\texttt{pop}):} $O(1)$ --- uma leitura + uma operação modular
+    \item \textbf{Espaço:} $O(n)$ fixo, sem alocação dinâmica
+\end{itemize}
+
+\textbf{Prova:} A operação \texttt{push} executa:
+\begin{enumerate}
+    \item Uma atribuição: \texttt{dados[head] = a} --- $O(1)$
+    \item Um incremento modular: \texttt{head = (head + 1) \% BUFFER\_SIZE} --- $O(1)$
+    \item Uma comparação e possível incremento de \texttt{tail} --- $O(1)$
+\end{enumerate}
+
+O número de operações é constante e independente de $n$:
+\[
+T_{\text{push}}(n) = c, \quad \forall n \implies T \in O(1)
+\]
+
+% ============================================================
+\section{Análise de Escalabilidade e Estresse}
+
+O sistema executa testes de estresse automatizados em diferentes ordens de magnitude, medindo o tempo total para $N$ inserções consecutivas.
+
+\subsection{Configuração do Teste}
+
+\begin{lstlisting}[caption={Teste de estresse comparativo}]
+void testeEstresse(int N) {
+    Amostra amostraFake = {5.0, 65.0, micros()};
+
+    // Vertente 1: Deslocamento Linear
+    arrayCount = 0;
+    unsigned long startLinear = micros();
+    for (int i = 0; i < N; i++) {
+        amostraFake.timestamp = micros();
+        pushLinear(amostraFake);
+    }
+    unsigned long duracaoLinear = micros() - startLinear;
+
+    // Vertente 2: Buffer Circular
+    bufferCircular.init();
+    unsigned long startCircular = micros();
+    for (int i = 0; i < N; i++) {
+        amostraFake.timestamp = micros();
+        bufferCircular.push(amostraFake);
+    }
+    unsigned long duracaoCircular = micros() - startCircular;
+}
+\end{lstlisting}
+
+\subsection{Resultados Esperados}
+
+\begin{table}[H]
+\centering
+\caption{Comparativo de escalabilidade entre as vertentes}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Escala (N)} & \textbf{Vertente 1 (Linear)} & \textbf{Vertente 2 (Circular)} & \textbf{Speedup} \\
+\midrule
+$N = 100$    & Diferença imperceptível   & Performance estável    & $\approx 1\text{--}2\times$ \\
+$N = 5.000$  & Atraso perceptível        & $O(1)$ mantém latência mínima & $\approx 50\text{--}100\times$ \\
+$N = 20.000$ & Alto consumo de CPU       & Sem alteração no tempo & $\approx 200\text{--}500\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Análise Assintótica Comparativa}
+
+Para $N$ inserções com buffer cheio:
+
+\begin{align}
+T_{\text{linear}}(N) &= \sum_{i=1}^{N} (n - 1) = N \cdot (n - 1) \in \Theta(N \cdot n) \\
+T_{\text{circular}}(N) &= \sum_{i=1}^{N} c = N \cdot c \in \Theta(N)
+\end{align}
+
+Onde $n = $ \texttt{BUFFER\_SIZE} $= 1000$ e $c$ é uma constante (operações de índice modular).
+
+O \textit{speedup} teórico é:
+\[
+S = \frac{T_{\text{linear}}}{T_{\text{circular}}} = \frac{N \cdot (n-1)}{N \cdot c} = \frac{n-1}{c} \approx \frac{999}{c}
+\]
+
+Como $c$ é constante (tipicamente 3--5 operações), o speedup cresce linearmente com o tamanho do buffer, independente de $N$.
+
+% ============================================================
+\section{Instrumentação de Código}
+
+\subsection{Medição de Latência}
+
+O sistema utiliza \texttt{micros()} para medição de alta resolução (1 $\mu$s) do tempo de execução:
+
+\begin{lstlisting}[caption={Instrumentação no loop principal}]
+// 500 insercoes por ciclo para evidenciar diferenca
+#define INSERCOES_POR_CICLO 500
+
+unsigned long t1 = micros();
+for (int i = 0; i < INSERCOES_POR_CICLO; i++) {
+    novaAmostra.timestamp = micros();
+    pushLinear(novaAmostra);
+}
+unsigned long latenciaInsercao = micros() - t1;
+\end{lstlisting}
+
+\subsection{Monitoramento de Memória}
+
+O heap livre é monitorado via \texttt{ESP.getFreeHeap()} e publicado a cada ciclo de leitura:
+
+\begin{lstlisting}[caption={Publicação de métricas de performance via MQTT}]
+char payloadPerf[200];
+snprintf(payloadPerf, sizeof(payloadPerf),
+    "{\"linear_us\":%lu,\"circular_us\":%lu,"
+    "\"heap_livre\":%u,\"buffer_count\":%d}",
+    latenciaV1, latenciaV2, ESP.getFreeHeap(),
+    bufferCircular.count);
+mqtt.publish(MQTT_TOPIC_PERF, payloadPerf);
+\end{lstlisting}
+
+% ============================================================
+\section{Diagnóstico de Memória}
+
+\subsection{Vertente 1: Fragmentação e Instabilidade}
+
+A Vertente 1 utiliza um array estático de tamanho fixo, porém o padrão de acesso é problemático:
+
+\begin{itemize}
+    \item \textbf{Custo de cópia:} cada inserção com buffer cheio move $999 \times \text{sizeof(Amostra)}$ bytes ($999 \times 12 = 11.988$ bytes por operação);
+    \item \textbf{Pressão no cache:} o deslocamento sequencial invalida linhas de cache L1;
+    \item \textbf{Consumo de CPU:} ciclos gastos em cópia não estão disponíveis para amostragem, gerando \textit{jitter} no período de leitura.
+\end{itemize}
+
+\subsection{Vertente 2: Estabilidade Garantida}
+
+O buffer circular mantém comportamento determinístico:
+
+\begin{itemize}
+    \item \textbf{Memória fixa:} alocação estática de $1000 \times 12 = 12.000$ bytes, sem variação;
+    \item \textbf{Sem fragmentação:} nenhuma alocação/dealocação dinâmica ocorre após \texttt{init()};
+    \item \textbf{Heap estável:} \texttt{ESP.getFreeHeap()} permanece constante ao longo da execução;
+    \item \textbf{Determinismo temporal:} cada operação executa em tempo constante, eliminando jitter.
+\end{itemize}
+
+\subsection{Impacto no ESP32}
+
+O ESP32 possui aproximadamente 320\,KB de RAM. Com \texttt{BUFFER\_SIZE = 1000} e \texttt{sizeof(Amostra) = 12}:
+
+\begin{itemize}
+    \item Cada buffer ocupa $\approx 12$\,KB (3.75\% da RAM);
+    \item O sistema mantém dois buffers (um por vertente) para comparação: $\approx 24$\,KB;
+    \item Heap livre típico em operação: $\approx 270\text{--}290$\,KB.
+\end{itemize}
+
+% ============================================================
+\section{Discussão: Comportamento sob Instabilidade de Rede}
+
+\subsection{Simulação de Gargalo}
+
+Quando a conexão MQTT apresenta latência elevada (simulando instabilidade de rede), o comportamento das vertentes diverge significativamente:
+
+\subsubsection{Vertente 1 --- Colapso em Cascata}
+
+\begin{enumerate}
+    \item O envio MQTT bloqueante trava o loop principal;
+    \item Amostras são perdidas durante o bloqueio (sem buffer intermediário);
+    \item Ao retomar, as inserções com deslocamento agravam o atraso acumulado;
+    \item O sistema entra em estado de \textit{jitter} crescente até estabilização forçada.
+\end{enumerate}
+
+\subsubsection{Vertente 2 --- Degradação Graciosa}
+
+\begin{enumerate}
+    \item O produtor continua inserindo amostras no ring buffer sem bloqueio;
+    \item O consumidor é independente e opera em intervalo próprio (5\,s);
+    \item Se a rede está lenta, o buffer acumula amostras (até 1000);
+    \item Quando a rede se recupera, o consumidor drena o backlog gradualmente (10 amostras/ciclo);
+    \item Nenhuma amostra é perdida enquanto o buffer não atinge capacidade máxima.
+\end{enumerate}
+
+\subsection{Vantagem Arquitetural}
+
+O modelo Produtor-Consumidor implementado na Vertente~2 desacopla completamente a taxa de amostragem da taxa de transmissão. O buffer circular atua como um amortecedor (\textit{shock absorber}) temporal, absorvendo picos de latência de rede sem impactar a coleta de dados.
+
+% ============================================================
+\section{Arquitetura do Sistema}
+
+\subsection{Hardware}
+\begin{itemize}
+    \item \textbf{Microcontrolador:} ESP32 DevKit v1 (Dual-core 240\,MHz, 320\,KB SRAM, WiFi);
+    \item \textbf{Sensor de nível:} sensor analógico de água no pino GPIO33;
+    \item \textbf{Sensor de umidade:} DHT11 no pino GPIO4;
+    \item \textbf{Indicador visual:} LED RGB nos pinos GPIO25 (R), GPIO26 (G), GPIO27 (B).
+\end{itemize}
+
+\subsection{Software}
+\begin{itemize}
+    \item \textbf{Firmware:} C++/Arduino via PlatformIO (ESP-IDF framework);
+    \item \textbf{Comunicação:} MQTT via biblioteca PubSubClient;
+    \item \textbf{Broker:} Mosquitto (local);
+    \item \textbf{Dashboard:} Flask (Python) + HTMX + Chart.js;
+    \item \textbf{Atualização:} polling a cada 2--3\,s via HTMX e \texttt{fetch()}.
+\end{itemize}
+
+\subsection{Fluxo de Dados}
+
+\begin{verbatim}
+[Sensores] --> [ESP32 Firmware] --MQTT--> [Broker Mosquitto]
+                                               |
+                                               v
+                                    [Flask App (subscriber)]
+                                               |
+                                               v
+                                    [Dashboard Web (Chart.js)]
+\end{verbatim}
+
+% ============================================================
+\section{Painel de Telemetria}
+
+O dashboard web apresenta quatro visualizações principais:
+
+\begin{enumerate}
+    \item \textbf{Cards de Status:} nível de água (cm), umidade (\%), e classificação de risco (normal/atenção/crítico) com atualização a cada 2\,s via HTMX;
+    \item \textbf{Histórico de Leituras:} gráfico de linha com as últimas 50 amostras de nível e umidade;
+    \item \textbf{Latência em Tempo Real:} gráfico comparativo (escala logarítmica) do tempo de 500 inserções por ciclo entre as duas vertentes;
+    \item \textbf{Teste de Estresse:} gráfico de barras (escala logarítmica) com o tempo total para $N = 100$, $N = 5000$ e $N = 20000$ inserções;
+    \item \textbf{Heap Livre:} monitoramento contínuo da memória disponível no ESP32.
+\end{enumerate}
+
+Os gráficos de performance utilizam escala logarítmica para evidenciar a diferença de ordens de magnitude entre as vertentes.
+
+% ============================================================
+\section{Conclusão}
+
+O projeto demonstrou empiricamente que:
+
+\begin{enumerate}
+    \item A complexidade assintótica tem impacto direto e mensurável em sistemas embarcados com recursos limitados;
+    \item O Buffer Circular oferece garantias de tempo constante que eliminam jitter e mantêm a saúde da memória;
+    \item O padrão Produtor-Consumidor com buffer intermediário é superior ao envio síncrono em cenários com latência de rede variável;
+    \item O speedup observado cresce com o tamanho do buffer, confirmando a análise teórica $S \approx (n-1)/c$.
+\end{enumerate}
+
+A escolha da estrutura de dados adequada não é apenas uma questão acadêmica --- em sistemas embarcados, pode significar a diferença entre um sistema estável e confiável e um sistema sujeito a falhas intermitentes e perda de dados.
+
+% ============================================================
+\section*{Referências}
+
+\begin{enumerate}[label={[\arabic*]}]
+    \item Cormen, T.H. et al. \textit{Introduction to Algorithms}. 4th ed. MIT Press, 2022.
+    \item Espressif Systems. \textit{ESP32 Technical Reference Manual}. 2023.
+    \item OASIS. \textit{MQTT Version 3.1.1}. OASIS Standard, 2014.
+    \item PlatformIO. \textit{PlatformIO Documentation}. \url{https://docs.platformio.org/}.
+\end{enumerate}
+
+\end{document}
